@@ -13,6 +13,8 @@ namespace EveryGo
         private readonly MainWindow _main;
         private readonly Config _config;
         private Border _card;
+        private string _autostartLoadError;
+        private bool _suppressAutostart;
 
         public SettingsWindow(MainWindow main)
         {
@@ -23,6 +25,13 @@ namespace EveryGo
             InitializeWindow();
             BuildUi();
             PlaceNearMain();
+            Loaded += delegate
+            {
+                if (!string.IsNullOrEmpty(_autostartLoadError))
+                {
+                    _main.ShowNotice("读取开机自启状态失败：" + _autostartLoadError, true);
+                }
+            };
         }
 
         private void InitializeWindow()
@@ -67,10 +76,62 @@ namespace EveryGo
 
             StackPanel body = new StackPanel { Margin = new Thickness(0, 10, 0, 0) };
             body.Children.Add(UiControls.SectionLabel("启动"));
+
+            bool autostartOn = false;
+            string autostartError = "";
+            Autostart.TryIsEnabled(out autostartOn, out autostartError);
+            _autostartLoadError = autostartError;
+
+            CheckBox autostartBox = null;
+            autostartBox = UiControls.ToggleSwitch(autostartOn, delegate(bool on)
+            {
+                if (_suppressAutostart) return;
+                string error = "";
+                if (!Autostart.TrySetEnabled(on, _main.ExePath, out error))
+                {
+                    _suppressAutostart = true;
+                    autostartBox.IsChecked = !on;
+                    _suppressAutostart = false;
+                    _main.ShowNotice("开机自启设置失败：" + error, true);
+                }
+            });
+            body.Children.Add(UiControls.SettingRow("开机自启", autostartBox));
             body.Children.Add(UiControls.SettingRow(
                 "窗口置顶",
                 UiControls.ToggleSwitch(_config.window.topmost, delegate(bool on) { _main.ApplyTopmost(on); })));
-            body.Children.Add(UiControls.Gap(14));
+            body.Children.Add(UiControls.Gap(8));
+
+            body.Children.Add(UiControls.SectionLabel("行为"));
+            body.Children.Add(UiControls.SettingRow(
+                "关闭按钮",
+                UiControls.PillGroup(
+                    new string[] { "直接退出", "最小化到托盘" },
+                    _config.closeAction == Config.CloseTray ? 1 : 0,
+                    delegate(int index)
+                    {
+                        string action = index == 1 ? Config.CloseTray : Config.CloseExit;
+                        string error = "";
+                        if (!_main.SetCloseAction(action, out error))
+                        {
+                            _main.ShowNotice("切换关闭行为失败：" + error, true);
+                        }
+                    })));
+            body.Children.Add(UiControls.SettingRow(
+                "脚本控制台",
+                UiControls.PillGroup(
+                    new string[] { "显示", "最小化", "隐藏" },
+                    ConsoleModeIndex(_config.consoleMode),
+                    delegate(int index)
+                    {
+                        string[] modes = new string[]
+                        {
+                            Config.ConsoleShow,
+                            Config.ConsoleMinimized,
+                            Config.ConsoleHidden
+                        };
+                        _main.SetConsoleMode(modes[index]);
+                    })));
+            body.Children.Add(UiControls.Gap(8));
 
             body.Children.Add(UiControls.SectionLabel("面板"));
             body.Children.Add(UiControls.SettingRow(
@@ -79,7 +140,7 @@ namespace EveryGo
                     new string[] { "4 列", "5 列", "6 列" },
                     Config.IndexOfGridColumnOption(_config.gridColumns),
                     delegate(int index) { _main.SetGridColumns(Config.GridColumnOptions[index]); })));
-            body.Children.Add(UiControls.Gap(14));
+            body.Children.Add(UiControls.Gap(8));
 
             body.Children.Add(UiControls.SectionLabel("数据"));
             body.Children.Add(new TextBlock
@@ -88,27 +149,30 @@ namespace EveryGo
                 FontSize = 11,
                 Foreground = Theme.TextSecondaryBrush
             });
-            body.Children.Add(new TextBlock
+            TextBlock dataPath = new TextBlock
             {
                 Text = _main.DataDirectory,
                 FontSize = 10.5,
                 Foreground = Theme.TextMutedBrush,
-                TextWrapping = TextWrapping.Wrap,
-                Margin = new Thickness(0, 3, 0, 6)
-            });
+                TextWrapping = TextWrapping.NoWrap,
+                TextTrimming = TextTrimming.CharacterEllipsis,
+                Margin = new Thickness(0, 2, 0, 4),
+                ToolTip = UiControls.MakeToolTip(_main.DataDirectory)
+            };
+            body.Children.Add(dataPath);
             body.Children.Add(UiControls.LinkButton("打开数据目录", OpenDataDirectory));
 
-            body.Children.Add(new TextBlock
+            ScrollViewer scroller = new ScrollViewer
             {
-                Text = "添加应用、开机自启、托盘与背景设置在后续阶段接入。",
-                FontSize = 10,
-                Foreground = Theme.TextMutedBrush,
-                TextWrapping = TextWrapping.Wrap,
-                Margin = new Thickness(0, 16, 0, 0)
-            });
-
-            Grid.SetRow(body, 1);
-            content.Children.Add(body);
+                Content = body,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+                CanContentScroll = false,
+                Focusable = false,
+                Background = Brushes.Transparent
+            };
+            Grid.SetRow(scroller, 1);
+            content.Children.Add(scroller);
             content.Children.Add(BuildFooter());
 
             cardContent.Children.Add(content);
@@ -116,6 +180,13 @@ namespace EveryGo
             _card.MouseLeftButtonDown += OnCardMouseDown;
             root.Children.Add(_card);
             Content = root;
+        }
+
+        private static int ConsoleModeIndex(string mode)
+        {
+            if (mode == Config.ConsoleShow) return 0;
+            if (mode == Config.ConsoleHidden) return 2;
+            return 1;
         }
 
         private FrameworkElement BuildHeader()

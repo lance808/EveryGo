@@ -1,8 +1,10 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Windows.Media.Imaging;
 using Microsoft.Win32.SafeHandles;
 
 namespace EveryGo
@@ -50,6 +52,9 @@ namespace EveryGo
                 RunCase(cases, "名称回退与重复项去重", TestNameFallback);
                 RunCase(cases, "原子写入与 config.bak", delegate { TestBackup(tempRoot); });
                 RunCase(cases, "面板尺寸计算", TestLayoutMetrics);
+                RunCase(cases, "启动参数与工作目录", TestLaunchSpec);
+                RunCase(cases, "开机自启值与路径判定", TestAutostartValue);
+                RunCase(cases, "图标提取与缓存", delegate { TestIconCache(tempRoot); });
             }
             catch (Exception ex)
             {
@@ -390,10 +395,90 @@ namespace EveryGo
             Expect(Math.Abs(LayoutMetrics.WindowWidth(4) - 384) < 0.01, "4 列窗口宽应为 384");
             Expect(Math.Abs(LayoutMetrics.WindowWidth(5) - 426) < 0.01, "5 列窗口宽应为 426");
             Expect(Math.Abs(LayoutMetrics.WindowWidth(6) - 452) < 0.01, "6 列窗口宽应为 452");
-            Expect(Math.Abs(LayoutMetrics.WindowHeight(1, 4) - 166) < 0.01, "空状态窗口高应为 166");
+            Expect(Math.Abs(LayoutMetrics.WindowHeight(1, 4, false) - 166) < 0.01, "空状态窗口高应为 166");
+            Expect(Math.Abs(LayoutMetrics.WindowHeight(1, 4, true) - 184) < 0.01, "带名称单行窗口高应为 184");
+            Expect(LayoutMetrics.ItemHeight(4, true) == 90, "4 列带名称单项高应为 90");
             Expect(LayoutMetrics.TileSize(4) == 72, "4 列方块应为 72");
             Expect(LayoutMetrics.TileSize(5) == 64, "5 列方块应为 64");
             Expect(LayoutMetrics.TileSize(6) == 56, "6 列方块应为 56");
+        }
+
+        private static void TestLaunchSpec()
+        {
+            string exePath = @"C:\Tools 中文\我的 工具.exe";
+            ProcessStartInfo exe = LaunchCommand.CreateStartInfo(exePath, Config.ConsoleMinimized);
+            Expect(exe.UseShellExecute, "exe 应使用 ShellExecute");
+            Expect(exe.FileName == exePath, "exe FileName 应为原路径");
+            Expect(exe.WorkingDirectory == @"C:\Tools 中文", "exe 工作目录应为所在目录");
+            Expect(exe.Arguments == "", "exe 不应附加参数");
+
+            string batPath = @"C:\脚本 目录\启动 服务.bat";
+            ProcessStartInfo show = LaunchCommand.CreateStartInfo(batPath, Config.ConsoleShow);
+            Expect(show.FileName == "cmd.exe", "bat 应通过 cmd.exe 启动");
+            Expect(show.UseShellExecute, "显示控制台应使用 ShellExecute");
+            Expect(show.WindowStyle == ProcessWindowStyle.Normal, "显示模式应为 Normal");
+            Expect(show.Arguments == LaunchCommand.BatArguments(batPath), "bat 双引号参数应正确");
+            Expect(show.WorkingDirectory == @"C:\脚本 目录", "bat 工作目录应为脚本目录");
+
+            ProcessStartInfo minimized = LaunchCommand.CreateStartInfo(batPath, Config.ConsoleMinimized);
+            Expect(minimized.UseShellExecute, "最小化控制台应使用 ShellExecute");
+            Expect(minimized.WindowStyle == ProcessWindowStyle.Minimized, "最小化模式应为 Minimized");
+
+            ProcessStartInfo hidden = LaunchCommand.CreateStartInfo(batPath, Config.ConsoleHidden);
+            Expect(!hidden.UseShellExecute, "隐藏控制台不应使用 ShellExecute");
+            Expect(hidden.CreateNoWindow, "隐藏控制台应 CreateNoWindow");
+            Expect(hidden.WindowStyle == ProcessWindowStyle.Hidden, "隐藏模式应为 Hidden");
+
+            bool threw = false;
+            try
+            {
+                LaunchCommand.CreateStartInfo(@"C:\x.txt", Config.ConsoleMinimized);
+            }
+            catch (ArgumentException)
+            {
+                threw = true;
+            }
+            Expect(threw, "不支持的文件类型应抛出异常");
+        }
+
+        private static void TestAutostartValue()
+        {
+            string exe = @"C:\Tools 中文\EveryGo.exe";
+            string value = Autostart.BuildValue(exe);
+            Expect(value == "\"" + exe + "\"", "自启值应为带引号的完整路径");
+            Expect(Autostart.IsCurrent(value, exe), "同一路径应判定为当前");
+            Expect(Autostart.IsCurrent(exe, exe), "未加引号的旧值也应兼容");
+            Expect(Autostart.IsCurrent("  " + value + "  ", @"c:\tools 中文\everygo.exe"), "大小写与空格应忽略");
+            Expect(!Autostart.IsCurrent(value, @"C:\Other\EveryGo.exe"), "不同路径不应判定为当前");
+            Expect(!Autostart.IsCurrent("", exe), "空值不应判定为当前");
+        }
+
+        private static void TestIconCache(string tempRoot)
+        {
+            string iconsDir = Path.Combine(tempRoot, "icon-cache");
+            IconCache.Initialize(iconsDir);
+
+            string cmd = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.System), "cmd.exe");
+            Expect(File.Exists(cmd), "系统 cmd.exe 应存在");
+
+            bool usedFallback;
+            BitmapSource icon = IconCache.GetOrExtractSync(cmd, out usedFallback);
+            Expect(icon != null, "应提取到 cmd.exe 图标");
+            Expect(!usedFallback, "cmd.exe 图标不应回退到通用图标");
+            Expect(icon.PixelWidth > 0 && icon.PixelHeight > 0, "图标尺寸应有效");
+            Expect(Directory.GetFiles(iconsDir, "*.png").Length >= 1, "应写入图标缓存 PNG");
+
+            string key1 = IconCache.CacheKeyFor(cmd);
+            string key2 = IconCache.CacheKeyFor(cmd);
+            Expect(key1 == key2, "缓存键应稳定");
+            Expect(IconCache.CacheKeyFor(@"C:\Other\app.exe") != key1, "不同路径缓存键应不同");
+
+            bool missingFallback;
+            BitmapSource missing = IconCache.GetOrExtractSync(
+                Path.Combine(tempRoot, "not-exist.exe"), out missingFallback);
+            Expect(missing != null, "缺失文件也应返回图标");
+            Expect(missingFallback, "缺失文件应使用通用图标");
         }
 
         /// <summary>WinExe 无控制台时附着到父进程控制台输出，失败则忽略（报告文件仍有记录）。</summary>

@@ -3,6 +3,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
+using System.Windows.Markup;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Media.Effects;
@@ -60,6 +61,81 @@ namespace EveryGo
 
     internal static class UiControls
     {
+        private static Style _menuItemStyle;
+        private static readonly object MenuStyleLock = new object();
+
+        public static ContextMenu CreateContextMenu()
+        {
+            ContextMenu menu = new ContextMenu
+            {
+                Background = Theme.ToastBackgroundBrush,
+                BorderBrush = Theme.CardBorderBrush,
+                BorderThickness = new Thickness(1),
+                Padding = new Thickness(4),
+                FontFamily = Theme.Font,
+                FontSize = 11,
+                HasDropShadow = true
+            };
+            Style style = MenuItemStyle();
+            if (style != null)
+            {
+                menu.Resources[typeof(MenuItem)] = style;
+            }
+            return menu;
+        }
+
+        public static MenuItem CreateMenuItem(string header)
+        {
+            MenuItem item = new MenuItem { Header = header };
+            Style style = MenuItemStyle();
+            if (style != null) item.Style = style;
+            return item;
+        }
+
+        public static Style MenuItemStyle()
+        {
+            if (_menuItemStyle != null) return _menuItemStyle;
+            lock (MenuStyleLock)
+            {
+                if (_menuItemStyle != null) return _menuItemStyle;
+                try
+                {
+                    string xaml =
+                        @"<Style xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation' "
+                        + @"xmlns:x='http://schemas.microsoft.com/winfx/2006/xaml' "
+                        + @"TargetType='{x:Type MenuItem}'>"
+                        + @"<Setter Property='Foreground' Value='#E8EAF0'/>"
+                        + @"<Setter Property='FontFamily' Value='Segoe UI Variable Text, Microsoft YaHei UI'/>"
+                        + @"<Setter Property='FontSize' Value='11'/>"
+                        + @"<Setter Property='Padding' Value='10,6'/>"
+                        + @"<Setter Property='Template'>"
+                        + @"<Setter.Value>"
+                        + @"<ControlTemplate TargetType='{x:Type MenuItem}'>"
+                        + @"<Border x:Name='Bd' Background='Transparent' CornerRadius='6' Padding='{TemplateBinding Padding}'>"
+                        + @"<ContentPresenter ContentSource='Header' RecognizesAccessKey='True' VerticalAlignment='Center'/>"
+                        + @"</Border>"
+                        + @"<ControlTemplate.Triggers>"
+                        + @"<Trigger Property='IsHighlighted' Value='True'>"
+                        + @"<Setter TargetName='Bd' Property='Background' Value='#1FFFFFFF'/>"
+                        + @"</Trigger>"
+                        + @"<Trigger Property='IsEnabled' Value='False'>"
+                        + @"<Setter Property='Foreground' Value='#66FFFFFF'/>"
+                        + @"</Trigger>"
+                        + @"</ControlTemplate.Triggers>"
+                        + @"</ControlTemplate>"
+                        + @"</Setter.Value>"
+                        + @"</Setter>"
+                        + @"</Style>";
+                    _menuItemStyle = (Style)XamlReader.Parse(xaml);
+                }
+                catch (Exception ex)
+                {
+                    Logger.Error("创建深色菜单样式失败", ex);
+                }
+                return _menuItemStyle;
+            }
+        }
+
         public static ToolTip MakeToolTip(string text)
         {
             TextBlock content = new TextBlock

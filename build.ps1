@@ -5,6 +5,9 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
+$distDir = Join-Path $root 'dist'
+$preservedData = $null
+$buildFailed = $false
 Push-Location $root
 try {
     Write-Host '=== EveryGo build ===' -ForegroundColor Cyan
@@ -89,6 +92,12 @@ try {
 
     $distDir = Join-Path $root 'dist'
     if (Test-Path $distDir) {
+        $runtimeData = Join-Path $distDir 'EveryGo.data'
+        if (Test-Path $runtimeData) {
+            $preservedData = Join-Path $env:TEMP ('EveryGo.data.preserve-' + [guid]::NewGuid().ToString('N'))
+            Move-Item -Path $runtimeData -Destination $preservedData -Force
+            Write-Host ("运行数据临时移出：" + $runtimeData)
+        }
         Remove-Item -Path $distDir -Recurse -Force
     }
     New-Item -ItemType Directory -Path $distDir | Out-Null
@@ -155,6 +164,23 @@ try {
     Write-Host ''
     Write-Host '构建完成（未启动 GUI）。' -ForegroundColor Green
 }
+catch {
+    Write-Host ("构建失败：" + $_.Exception.Message) -ForegroundColor Red
+    $buildFailed = $true
+}
 finally {
+    if ($preservedData -and (Test-Path $preservedData)) {
+        if (-not (Test-Path $distDir)) {
+            New-Item -ItemType Directory -Path $distDir | Out-Null
+        }
+        $restoreTarget = Join-Path $distDir 'EveryGo.data'
+        if (-not (Test-Path $restoreTarget)) {
+            Move-Item -Path $preservedData -Destination $restoreTarget -Force
+        }
+    }
     Pop-Location
 }
+if ($buildFailed) {
+    exit 1
+}
+exit 0

@@ -1,10 +1,14 @@
 using System;
+using System.Collections.Generic;
+using System.Diagnostics;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Media.Effects;
+using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
 using System.Windows.Threading;
 
@@ -14,25 +18,35 @@ namespace EveryGo
     {
         private readonly ConfigStore _store;
         private readonly Config _config;
-        private readonly string _loadNotice;
+        private string _startupNotice;
 
         private Border _card;
         private Grid _gridHost;
+        private ScrollViewer _gridScroll;
         private ToolbarIcon _pinIcon;
         private SettingsWindow _settings;
+        private TrayService _tray;
 
         private DispatcherTimer _saveTimer;
         private DispatcherTimer _toastTimer;
+        private DispatcherTimer _iconRefreshTimer;
         private Border _toast;
         private TextBlock _toastText;
 
+        private readonly Dictionary<string, AppTile> _tiles =
+            new Dictionary<string, AppTile>(StringComparer.OrdinalIgnoreCase);
+        private readonly HashSet<string> _iconFallbackNotified =
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        private string _pendingAppearId;
         private bool _readyForSave;
+        private bool _exiting;
 
         public MainWindow(ConfigStore store, Config config, string loadNotice)
         {
             _store = store;
             _config = config;
-            _loadNotice = loadNotice;
+            _startupNotice = loadNotice;
             _config.Normalize();
 
             InitializeWindow();
@@ -41,13 +55,21 @@ namespace EveryGo
             _saveTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(400) };
             _saveTimer.Tick += OnSaveTimerTick;
 
+            _iconRefreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(10) };
+            _iconRefreshTimer.Tick += delegate
+            {
+                if (IsVisible) RefreshTiles();
+            };
+            _iconRefreshTimer.Start();
+
             ApplyConfig();
-            ApplyWindowSize();
-            RenderGrid();
+            RebuildPanel();
             RestorePosition();
+            ApplyTrayAtStartup();
 
             Loaded += OnLoaded;
             LocationChanged += OnLocationChanged;
+            Activated += delegate { RefreshTiles(); };
             Closing += OnClosing;
             Closed += OnClosed;
         }
@@ -55,6 +77,7 @@ namespace EveryGo
         public Config Config { get { return _config; } }
         public ConfigStore Store { get { return _store; } }
         public string DataDirectory { get { return _store.Paths.DataDir; } }
+        public string ExePath { get { return _store.Paths.ExePath; } }
 
         private void InitializeWindow()
         {
@@ -105,18 +128,26 @@ namespace EveryGo
 
             layout.Children.Add(BuildToolbar());
 
-            _gridHost = new Grid
+            _gridHost = new Grid();
+            _gridScroll = new ScrollViewer
             {
+                Content = _gridHost,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Hidden,
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+                CanContentScroll = false,
+                Focusable = false,
+                IsTabStop = false,
+                Background = Brushes.Transparent,
                 Margin = new Thickness(0, LayoutMetrics.ToolbarToGridGap, 0, 0),
-                HorizontalAlignment = HorizontalAlignment.Stretch,
-                VerticalAlignment = VerticalAlignment.Top
+                HorizontalAlignment = HorizontalAlignment.Stretch
             };
-            Grid.SetRow(_gridHost, 1);
-            layout.Children.Add(_gridHost);
+            Grid.SetRow(_gridScroll, 1);
+            layout.Children.Add(_gridScroll);
 
             cardContent.Children.Add(layout);
             _card.Child = cardContent;
             _card.MouseLeftButtonDown += OnCardMouseDown;
+            _card.ContextMenu = BuildPanelMenu();
             return _card;
         }
 
@@ -155,7 +186,7 @@ namespace EveryGo
             minimizeIcon.MouseLeftButtonUp += delegate { WindowState = WindowState.Minimized; };
 
             ToolbarIcon closeIcon = new ToolbarIcon("关闭", IconKind.Close);
-            closeIcon.MouseLeftButtonUp += delegate { RequestExit(); };
+            closeIcon.MouseLeftButtonUp += delegate { RequestClose(); };
 
             ToolbarIcon[] all = new ToolbarIcon[] { _pinIcon, settingsIcon, minimizeIcon, closeIcon };
             for (int i = 0; i < all.Length; i++)
@@ -202,33 +233,104 @@ namespace EveryGo
             if (_pinIcon != null) _pinIcon.SetActive(_config.window.topmost);
         }
 
+        private void RebuildPanel()
+        {
+            ApplyWindowSize();
+            RenderGrid();
+        }
+
         private void ApplyWindowSize()
         {
             int columns = _config.gridColumns;
-            Width = LayoutMetrics.WindowWidth(columns);
-            _gridHost.Height = LayoutMetrics.GridHeight(1, LayoutMetrics.TileSize(columns));
+            int totalItems = Math.Max(1, _config.apps.Count + 1);
+            int rows = LayoutMetrics.RowCount(totalItems, columns);
+            bool withLabels = _config.apps.Count > 0;
 
-            double maxHeight = SystemParameters.WorkArea.Height * 0.8;
-            double desiredHeight = LayoutMetrics.WindowHeight(1, columns);
-            MaxHeight = maxHeight;
-            Height = Math.Min(desiredHeight, maxHeight);
+            double fullGridHeight = LayoutMetrics.GridHeight(rows, columns, withLabels);
+            double chromeHeight = LayoutMetrics.ChromeHeight();
+            double maxWindowHeight = SystemParameters.WorkArea.Height * 0.8;
+            double maxGridHeight = Math.Max(0, maxWindowHeight - chromeHeight);
+            double shownGridHeight = Math.Min(fullGridHeight, maxGridHeight);
+
+            Width = LayoutMetrics.WindowWidth(columns);
+            _gridHost.Width = LayoutMetrics.GridWidth(columns);
+            _gridHost.Height = fullGridHeight;
+            _gridScroll.Height = shownGridHeight;
+            MaxHeight = maxWindowHeight;
+            Height = chromeHeight + shownGridHeight;
             ClampToWorkArea();
         }
 
         private void RenderGrid()
         {
             if (_gridHost == null) return;
-            _gridHost.Children.Clear();
 
-            if (_config.apps.Count == 0)
+            _gridHost.Children.Clear();
+            _gridHost.RowDefinitions.Clear();
+            _tiles.Clear();
+
+            int columns = _config.gridColumns;
+            double tileSize = LayoutMetrics.TileSize(columns);
+            bool withLabels = _config.apps.Count > 0;
+            double itemHeight = LayoutMetrics.ItemHeight(columns, withLabels);
+
+            int totalItems = _config.apps.Count + 1;
+            int rows = Math.Max(1, (int)Math.Ceiling(totalItems / (double)columns));
+            for (int i = 0; i < rows; i++)
             {
-                double tileSize = LayoutMetrics.TileSize(_config.gridColumns);
-                FrameworkElement addTile = CreateAddTile(tileSize);
-                addTile.HorizontalAlignment = HorizontalAlignment.Center;
-                addTile.VerticalAlignment = VerticalAlignment.Center;
-                _gridHost.Children.Add(addTile);
+                double rowHeight = itemHeight + (i < rows - 1 ? LayoutMetrics.GridGap : 0);
+                _gridHost.RowDefinitions.Add(new RowDefinition { Height = new GridLength(rowHeight) });
             }
-            // Phase 2：非空状态在此渲染应用图标与「＋」。
+
+            bool centerRows = totalItems < columns;
+            int index = 0;
+            for (int row = 0; row < rows; row++)
+            {
+                int rowStart = row * columns;
+                int rowCount = Math.Min(columns, totalItems - rowStart);
+
+                StackPanel rowPanel = new StackPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    VerticalAlignment = VerticalAlignment.Top,
+                    HorizontalAlignment = centerRows ? HorizontalAlignment.Center : HorizontalAlignment.Left
+                };
+
+                for (int column = 0; column < rowCount; column++)
+                {
+                    FrameworkElement item;
+                    if (index < _config.apps.Count)
+                    {
+                        AppEntry app = _config.apps[index];
+                        AppTile tile = new AppTile(app, columns);
+                        tile.LaunchRequested += OnTileLaunchRequested;
+                        tile.RefreshMissing();
+                        tile.IconKey = IconCache.CacheKeyFor(app.path);
+                        if (!tile.IsMissing) LoadIcon(tile);
+                        if (!string.IsNullOrEmpty(_pendingAppearId)
+                            && string.Equals(_pendingAppearId, app.id, StringComparison.OrdinalIgnoreCase))
+                        {
+                            tile.PlayAppear();
+                        }
+                        tile.ContextMenu = BuildTileMenu(tile);
+                        _tiles[app.id] = tile;
+                        item = tile;
+                    }
+                    else
+                    {
+                        item = CreateAddTile(tileSize);
+                    }
+
+                    item.Margin = new Thickness(0, 0, column < rowCount - 1 ? LayoutMetrics.GridGap : 0, 0);
+                    rowPanel.Children.Add(item);
+                    index++;
+                }
+
+                Grid.SetRow(rowPanel, row);
+                _gridHost.Children.Add(rowPanel);
+            }
+
+            _pendingAppearId = null;
         }
 
         private FrameworkElement CreateAddTile(double size)
@@ -260,6 +362,7 @@ namespace EveryGo
                 Cursor = Cursors.Hand,
                 Child = visual,
                 ToolTip = UiControls.MakeToolTip("添加应用"),
+                VerticalAlignment = VerticalAlignment.Top,
                 Tag = "interactive"
             };
             ToolTipService.SetInitialShowDelay(hit, 350);
@@ -283,16 +386,235 @@ namespace EveryGo
                 plus.Effect = null;
                 AnimateOpacity(plus, 0.85);
             };
-            hit.MouseLeftButtonUp += delegate
-            {
-                ShowToast("Phase 1 骨架：添加应用将在 Phase 2 接入。", false);
-            };
+            hit.MouseLeftButtonUp += delegate { AddApp(); };
             return hit;
         }
 
-        private void ToggleTopmost()
+        private ContextMenu BuildPanelMenu()
         {
-            ApplyTopmost(!_config.window.topmost);
+            ContextMenu menu = UiControls.CreateContextMenu();
+            MenuItem add = UiControls.CreateMenuItem("添加应用");
+            add.Click += delegate { AddApp(); };
+            menu.Items.Add(add);
+            return menu;
+        }
+
+        private ContextMenu BuildTileMenu(AppTile tile)
+        {
+            ContextMenu menu = UiControls.CreateContextMenu();
+
+            MenuItem launch = UiControls.CreateMenuItem("启动");
+            launch.Click += delegate
+            {
+                if (tile.IsMissing)
+                {
+                    ShowToast("文件不存在：" + tile.Entry.path, true);
+                }
+                else
+                {
+                    LaunchApp(tile.Entry);
+                }
+            };
+            menu.Items.Add(launch);
+
+            MenuItem openLocation = UiControls.CreateMenuItem("打开文件位置");
+            openLocation.Click += delegate { OpenAppLocation(tile.Entry); };
+            menu.Items.Add(openLocation);
+
+            MenuItem remove = UiControls.CreateMenuItem("移除");
+            remove.Click += delegate { RemoveApp(tile); };
+            menu.Items.Add(remove);
+
+            return menu;
+        }
+
+        private void OnTileLaunchRequested(object sender, EventArgs e)
+        {
+            AppTile tile = sender as AppTile;
+            if (tile == null) return;
+            if (tile.IsMissing)
+            {
+                ShowToast("文件不存在：" + tile.Entry.path, true);
+                return;
+            }
+            LaunchApp(tile.Entry);
+        }
+
+        private void AddApp()
+        {
+            Microsoft.Win32.OpenFileDialog dialog = new Microsoft.Win32.OpenFileDialog
+            {
+                Title = "添加应用",
+                Filter = "应用程序 (*.exe;*.bat;*.cmd)|*.exe;*.bat;*.cmd",
+                FilterIndex = 1,
+                CheckFileExists = true,
+                CheckPathExists = true,
+                Multiselect = false
+            };
+            if (!string.IsNullOrEmpty(_config.lastBrowseDir) && System.IO.Directory.Exists(_config.lastBrowseDir))
+            {
+                dialog.InitialDirectory = _config.lastBrowseDir;
+            }
+
+            bool? result = dialog.ShowDialog(this);
+            if (result != true) return;
+
+            string path = dialog.FileName;
+            if (!System.IO.File.Exists(path) || !LaunchCommand.IsSupportedAppFile(path))
+            {
+                ShowToast("不支持的文件类型：" + path, true);
+                return;
+            }
+
+            string directory = System.IO.Path.GetDirectoryName(path);
+            if (!string.IsNullOrEmpty(directory)) _config.lastBrowseDir = directory;
+
+            AppTile existing = FindTileByPath(path);
+            if (existing != null || Config.ContainsPath(_config.apps, path))
+            {
+                if (existing != null)
+                {
+                    existing.BringIntoView();
+                    existing.PlayAttention();
+                }
+                SaveNow();
+                ShowToast("已添加", false);
+                return;
+            }
+
+            AppEntry app = new AppEntry(Config.CreateId(), path, Config.NameFromPath(path));
+            _config.apps.Add(app);
+            _pendingAppearId = app.id;
+            SaveNow();
+            RebuildPanel();
+            Logger.Info("已添加应用：" + path);
+        }
+
+        private void RemoveApp(AppTile tile)
+        {
+            if (tile == null || tile.Entry == null) return;
+            MessageBoxResult result = MessageBox.Show(
+                this,
+                "确定要从面板移除「" + tile.Entry.name + "」吗？",
+                "EveryGo",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Question);
+            if (result != MessageBoxResult.Yes) return;
+
+            string appId = tile.Entry.id;
+            for (int i = _config.apps.Count - 1; i >= 0; i--)
+            {
+                AppEntry app = _config.apps[i];
+                if (app != null && string.Equals(app.id, appId, StringComparison.OrdinalIgnoreCase))
+                {
+                    _config.apps.RemoveAt(i);
+                }
+            }
+            _tiles.Remove(appId);
+            SaveNow();
+            Logger.Info("已移除应用：" + tile.Entry.path);
+            tile.PlayDisappear(delegate { RebuildPanel(); });
+        }
+
+        private void LaunchApp(AppEntry app)
+        {
+            if (app == null) return;
+            if (!System.IO.File.Exists(app.path))
+            {
+                ShowToast("文件不存在：" + app.path, true);
+                return;
+            }
+            try
+            {
+                ProcessStartInfo info = LaunchCommand.CreateStartInfo(app.path, _config.consoleMode);
+                Process.Start(info);
+                Logger.Info("启动应用：" + app.path);
+            }
+            catch (Exception ex)
+            {
+                Logger.Error("启动应用失败：" + app.path, ex);
+                ShowToast("启动失败：" + app.name, true);
+            }
+        }
+
+        private void OpenAppLocation(AppEntry app)
+        {
+            if (app == null) return;
+            if (!System.IO.File.Exists(app.path))
+            {
+                ShowToast("文件不存在：" + app.path, true);
+                return;
+            }
+            try
+            {
+                ProcessStartInfo info = new ProcessStartInfo();
+                info.FileName = "explorer.exe";
+                info.Arguments = "/select,\"" + app.path + "\"";
+                info.UseShellExecute = true;
+                Process.Start(info);
+            }
+            catch (Exception ex)
+            {
+                Logger.Error("打开文件位置失败：" + app.path, ex);
+                ShowToast("无法打开文件位置：" + app.name, true);
+            }
+        }
+
+        private AppTile FindTile(string appId)
+        {
+            if (string.IsNullOrEmpty(appId)) return null;
+            AppTile tile;
+            return _tiles.TryGetValue(appId, out tile) ? tile : null;
+        }
+
+        private AppTile FindTileByPath(string path)
+        {
+            string target = Config.NormalizePathForCompare(path);
+            foreach (AppTile tile in _tiles.Values)
+            {
+                if (tile == null || tile.Entry == null) continue;
+                if (string.Equals(Config.NormalizePathForCompare(tile.Entry.path), target, StringComparison.OrdinalIgnoreCase))
+                {
+                    return tile;
+                }
+            }
+            return null;
+        }
+
+        private void LoadIcon(AppTile tile)
+        {
+            if (tile == null || tile.Entry == null) return;
+            string appId = tile.Entry.id;
+            string appName = tile.Entry.name;
+            IconCache.LoadAsync(tile.Entry.path, delegate(BitmapSource icon, bool usedFallback)
+            {
+                AppTile current = FindTile(appId);
+                if (current == null) return;
+                current.SetIcon(icon);
+                if (usedFallback && !current.IsMissing && !_iconFallbackNotified.Contains(appId))
+                {
+                    _iconFallbackNotified.Add(appId);
+                    ShowToast("无法提取图标：" + appName + "，已使用通用图标", true);
+                }
+            });
+        }
+
+        private void RefreshTiles()
+        {
+            if (_tiles.Count == 0) return;
+            foreach (AppEntry app in _config.apps)
+            {
+                if (app == null) continue;
+                AppTile tile = FindTile(app.id);
+                if (tile == null) continue;
+                tile.RefreshMissing();
+                string key = IconCache.CacheKeyFor(app.path);
+                if (!tile.IsMissing && !string.Equals(tile.IconKey, key, StringComparison.Ordinal))
+                {
+                    tile.IconKey = key;
+                    LoadIcon(tile);
+                }
+            }
         }
 
         public void ApplyTopmost(bool topmost)
@@ -307,9 +629,43 @@ namespace EveryGo
         {
             if (!Config.IsValidGridColumnCount(columns) || columns == _config.gridColumns) return;
             _config.gridColumns = columns;
-            ApplyWindowSize();
-            RenderGrid();
+            RebuildPanel();
             ScheduleSave();
+        }
+
+        public void SetConsoleMode(string mode)
+        {
+            if (!Config.IsValidConsoleMode(mode) || mode == _config.consoleMode) return;
+            _config.consoleMode = mode;
+            ScheduleSave();
+            Logger.Info("脚本控制台模式：" + mode);
+        }
+
+        public bool SetCloseAction(string action, out string error)
+        {
+            error = "";
+            if (action != Config.CloseTray && action != Config.CloseExit)
+            {
+                error = "非法的关闭行为。";
+                return false;
+            }
+            if (action == Config.CloseTray)
+            {
+                if (!EnsureTray())
+                {
+                    error = "托盘图标创建失败。";
+                    return false;
+                }
+            }
+            else
+            {
+                if (!IsVisible) ShowPanel();
+                DisposeTray();
+            }
+            _config.closeAction = action;
+            SaveNow();
+            Logger.Info("关闭行为：" + action);
+            return true;
         }
 
         public void ScheduleSave()
@@ -339,7 +695,7 @@ namespace EveryGo
             SaveNow();
         }
 
-        private void OpenSettings()
+        public void OpenSettings()
         {
             if (_settings != null)
             {
@@ -356,13 +712,118 @@ namespace EveryGo
             _settings.Show();
         }
 
-        private void RequestExit()
+        public void ShowPanel()
         {
+            Show();
+            if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
+            Activate();
+            IntPtr handle = new WindowInteropHelper(this).Handle;
+            if (handle != IntPtr.Zero)
+            {
+                NativeMethods.ShowWindow(handle, NativeMethods.SW_SHOW);
+                NativeMethods.SetForegroundWindow(handle);
+            }
+        }
+
+        public void ShowNotice(string message, bool warning)
+        {
+            ShowToast(message, warning);
+        }
+
+        public void ExitApplication()
+        {
+            if (_exiting) return;
+            _exiting = true;
             SaveNow();
+            DisposeTray();
             if (Application.Current != null)
             {
                 Application.Current.Shutdown();
             }
+            else
+            {
+                Close();
+            }
+        }
+
+        private void RequestClose()
+        {
+            if (_config.closeAction == Config.CloseTray)
+            {
+                HideToTray();
+            }
+            else
+            {
+                ExitApplication();
+            }
+        }
+
+        private void HideToTray()
+        {
+            if (_config.closeAction == Config.CloseTray)
+            {
+                if (!EnsureTray())
+                {
+                    _config.closeAction = Config.CloseExit;
+                    SaveNow();
+                    ShowToast("托盘图标创建失败，关闭行为已改为直接退出。", true);
+                    return;
+                }
+            }
+            SaveNow();
+            Hide();
+        }
+
+        private bool EnsureTray()
+        {
+            if (_tray != null) return true;
+            try
+            {
+                _tray = new TrayService(this, _store.Paths.ExePath);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Logger.Error("创建托盘图标失败", ex);
+                return false;
+            }
+        }
+
+        private void DisposeTray()
+        {
+            if (_tray != null)
+            {
+                _tray.Dispose();
+                _tray = null;
+            }
+        }
+
+        private void ApplyTrayAtStartup()
+        {
+            if (_config.closeAction != Config.CloseTray) return;
+            if (EnsureTray()) return;
+
+            _config.closeAction = Config.CloseExit;
+            try
+            {
+                _store.Save(_config);
+            }
+            catch (Exception ex)
+            {
+                Logger.Error("托盘失败后保存配置失败", ex);
+            }
+            AppendStartupNotice("托盘图标创建失败，关闭行为已改为直接退出。");
+        }
+
+        private void AppendStartupNotice(string message)
+        {
+            if (string.IsNullOrEmpty(message)) return;
+            _startupNotice = string.IsNullOrEmpty(_startupNotice) ? message : _startupNotice + " " + message;
+        }
+
+        private void ToggleTopmost()
+        {
+            ApplyTopmost(!_config.window.topmost);
         }
 
         private void OnCardMouseDown(object sender, MouseButtonEventArgs e)
@@ -375,7 +836,6 @@ namespace EveryGo
             }
             catch (InvalidOperationException)
             {
-                // 窗口状态切换时拖动可能失败，忽略即可。
             }
         }
 
@@ -392,14 +852,21 @@ namespace EveryGo
         private void OnLoaded(object sender, RoutedEventArgs e)
         {
             _readyForSave = true;
-            if (!string.IsNullOrEmpty(_loadNotice))
+            if (!string.IsNullOrEmpty(_startupNotice))
             {
-                ShowToast(_loadNotice, true);
+                ShowToast(_startupNotice, true);
             }
         }
 
         private void OnClosing(object sender, System.ComponentModel.CancelEventArgs e)
         {
+            if (_exiting) return;
+            if (_config.closeAction == Config.CloseTray)
+            {
+                e.Cancel = true;
+                HideToTray();
+                return;
+            }
             SaveNow();
         }
 
@@ -407,6 +874,8 @@ namespace EveryGo
         {
             if (_saveTimer != null) _saveTimer.Stop();
             if (_toastTimer != null) _toastTimer.Stop();
+            if (_iconRefreshTimer != null) _iconRefreshTimer.Stop();
+            DisposeTray();
             if (Application.Current != null)
             {
                 Application.Current.Shutdown();
@@ -471,8 +940,8 @@ namespace EveryGo
             {
                 Foreground = Theme.TextPrimaryBrush,
                 FontSize = 11,
-                TextWrapping = TextWrapping.NoWrap,
-                TextTrimming = TextTrimming.CharacterEllipsis
+                TextWrapping = TextWrapping.Wrap,
+                TextTrimming = TextTrimming.None
             };
             _toast = new Border
             {
@@ -505,6 +974,10 @@ namespace EveryGo
             if (_toast == null) return;
             _toastText.Text = message;
             _toastText.Foreground = warning ? Theme.AccentBrush : Theme.TextPrimaryBrush;
+            if (!double.IsNaN(Width))
+            {
+                _toast.MaxWidth = Math.Max(220, Width - 60);
+            }
             _toast.Visibility = Visibility.Visible;
 
             _toast.BeginAnimation(UIElement.OpacityProperty, null);

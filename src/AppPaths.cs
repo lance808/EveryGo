@@ -10,6 +10,7 @@ namespace EveryGo
     internal sealed class AppPaths
     {
         public string ExeDir { get; private set; }
+        public string ExePath { get; private set; }
         public string DataDir { get; private set; }
         public bool IsPortable { get; private set; }
 
@@ -26,7 +27,12 @@ namespace EveryGo
         public static AppPaths Resolve()
         {
             AppPaths paths = new AppPaths();
-            paths.ExeDir = GetExeDir();
+            paths.ExePath = GetExePath();
+            paths.ExeDir = Path.GetDirectoryName(paths.ExePath);
+            if (string.IsNullOrEmpty(paths.ExeDir))
+            {
+                paths.ExeDir = Environment.CurrentDirectory;
+            }
 
             string portableDir = Path.Combine(paths.ExeDir, "EveryGo.data");
             if (TryPrepareWritableDir(portableDir))
@@ -63,7 +69,7 @@ namespace EveryGo
             return paths;
         }
 
-        private static string GetExeDir()
+        private static string GetExePath()
         {
             string exePath = null;
             try
@@ -75,14 +81,9 @@ namespace EveryGo
             }
             if (string.IsNullOrEmpty(exePath))
             {
-                exePath = AppDomain.CurrentDomain.BaseDirectory;
+                exePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "EveryGo.exe");
             }
-            if (string.IsNullOrEmpty(exePath))
-            {
-                exePath = Environment.CurrentDirectory;
-            }
-            string dir = Path.GetDirectoryName(exePath);
-            return string.IsNullOrEmpty(dir) ? Environment.CurrentDirectory : dir;
+            return exePath;
         }
 
         private static bool TryPrepareWritableDir(string dir)

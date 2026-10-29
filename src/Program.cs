@@ -7,8 +7,8 @@ namespace EveryGo
 {
     internal static class Program
     {
-        public const string AppVersion = "0.1.0";
-        public const string PhaseLabel = "Phase 1";
+        public const string AppVersion = "0.2.0";
+        public const string PhaseLabel = "Phase 2";
 
         private const string MutexName = "EveryGo.SingleInstance.v1";
 
@@ -66,6 +66,7 @@ namespace EveryGo
         {
             AppPaths paths = AppPaths.Resolve();
             Logger.Initialize(paths.LogFile);
+            IconCache.Initialize(paths.IconsDir);
             Logger.Info("启动 EveryGo " + AppVersion + "（" + PhaseLabel + "），数据目录：" + paths.DataDir
                 + "，便携：" + paths.IsPortable);
 
@@ -81,6 +82,13 @@ namespace EveryGo
                 Logger.Error("加载配置失败，改用默认配置启动", ex);
                 config = new Config();
                 notice = "读取配置失败，已使用默认值启动。";
+            }
+
+            string autostartNotice = "";
+            Autostart.RepairIfNeeded(paths.ExePath, out autostartNotice);
+            if (!string.IsNullOrEmpty(autostartNotice))
+            {
+                notice = string.IsNullOrEmpty(notice) ? autostartNotice : notice + " " + autostartNotice;
             }
 
             Application app = new Application();
