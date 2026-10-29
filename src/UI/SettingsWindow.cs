@@ -3,6 +3,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 
@@ -13,8 +14,22 @@ namespace EveryGo
         private readonly MainWindow _main;
         private readonly Config _config;
         private Border _card;
+
+        private PillSelector _typeSelector;
+        private StackPanel _solidPanel;
+        private StackPanel _imagePanel;
+        private Border _colorSwatch;
+        private TextBlock _colorText;
+        private TextBlock _imageNameText;
+        private CheckBox _glassToggle;
+        private SliderRow _opacityRow;
+        private SliderRow _imageOpacityRow;
+        private SliderRow _imageBlurRow;
+        private SliderRow _tintRow;
+
+        private bool _suppressUi;
+        private bool _lowOpacityWarned;
         private string _autostartLoadError;
-        private bool _suppressAutostart;
 
         public SettingsWindow(MainWindow main)
         {
@@ -43,7 +58,7 @@ namespace EveryGo
             ResizeMode = ResizeMode.NoResize;
             ShowInTaskbar = false;
             Width = 380;
-            Height = 460;
+            Height = 560;
             Background = Brushes.Transparent;
             FontFamily = Theme.Font;
             UseLayoutRounding = true;
@@ -75,8 +90,8 @@ namespace EveryGo
             content.Children.Add(BuildHeader());
 
             StackPanel body = new StackPanel { Margin = new Thickness(0, 10, 0, 0) };
-            body.Children.Add(UiControls.SectionLabel("启动"));
 
+            body.Children.Add(UiControls.SectionLabel("启动"));
             bool autostartOn = false;
             string autostartError = "";
             Autostart.TryIsEnabled(out autostartOn, out autostartError);
@@ -85,13 +100,13 @@ namespace EveryGo
             CheckBox autostartBox = null;
             autostartBox = UiControls.ToggleSwitch(autostartOn, delegate(bool on)
             {
-                if (_suppressAutostart) return;
+                if (_suppressUi) return;
                 string error = "";
                 if (!Autostart.TrySetEnabled(on, _main.ExePath, out error))
                 {
-                    _suppressAutostart = true;
+                    _suppressUi = true;
                     autostartBox.IsChecked = !on;
-                    _suppressAutostart = false;
+                    _suppressUi = false;
                     _main.ShowNotice("开机自启设置失败：" + error, true);
                 }
             });
@@ -133,6 +148,55 @@ namespace EveryGo
                     })));
             body.Children.Add(UiControls.Gap(8));
 
+            body.Children.Add(UiControls.SectionLabel("背景"));
+            _typeSelector = new PillSelector(
+                new string[] { "纯色", "图片" },
+                _config.appearance.type == Config.AppearanceImage ? 1 : 0,
+                OnAppearanceTypeSelected);
+            body.Children.Add(UiControls.SettingRow("背景类型", _typeSelector.Element));
+
+            _solidPanel = new StackPanel();
+            _solidPanel.Children.Add(BuildColorRow());
+            _opacityRow = new SliderRow(
+                "透明度", 0, 100, _config.appearance.opacity, "%", OnOpacityChanged);
+            _solidPanel.Children.Add(_opacityRow);
+            body.Children.Add(_solidPanel);
+
+            _imagePanel = new StackPanel();
+            _imagePanel.Children.Add(BuildImageActionsRow());
+            _imageNameText = new TextBlock
+            {
+                FontSize = 10,
+                Foreground = Theme.TextMutedBrush,
+                TextTrimming = TextTrimming.CharacterEllipsis,
+                TextWrapping = TextWrapping.NoWrap,
+                Margin = new Thickness(0, 2, 0, 2)
+            };
+            _imagePanel.Children.Add(_imageNameText);
+            _imageOpacityRow = new SliderRow(
+                "图片不透明度", 0, 100, _config.appearance.imageOpacity, "%", OnImageOpacityChanged);
+            _imageBlurRow = new SliderRow(
+                "图片模糊", 0, 24, _config.appearance.imageBlur, "px", OnImageBlurChanged);
+            _tintRow = new SliderRow(
+                "色调强度", 0, 100, _config.appearance.tintOpacity, "%", OnTintOpacityChanged);
+            _imagePanel.Children.Add(_imageOpacityRow);
+            _imagePanel.Children.Add(_imageBlurRow);
+            _imagePanel.Children.Add(_tintRow);
+            body.Children.Add(_imagePanel);
+            body.Children.Add(UiControls.Gap(8));
+
+            body.Children.Add(UiControls.SectionLabel("玻璃"));
+            _glassToggle = UiControls.ToggleSwitch(_config.appearance.glass, delegate(bool on)
+            {
+                if (_suppressUi) return;
+                _main.UpdateAppearance(delegate(AppearanceConfig appearance) { appearance.glass = on; });
+            });
+            body.Children.Add(UiControls.SettingRow("玻璃质感", _glassToggle));
+            FrameworkElement reset = UiControls.LinkButton("恢复默认外观", RestoreDefaultAppearance);
+            reset.Margin = new Thickness(0, 8, 0, 0);
+            body.Children.Add(reset);
+            body.Children.Add(UiControls.Gap(8));
+
             body.Children.Add(UiControls.SectionLabel("面板"));
             body.Children.Add(UiControls.SettingRow(
                 "网格列数",
@@ -171,6 +235,11 @@ namespace EveryGo
                 Focusable = false,
                 Background = Brushes.Transparent
             };
+            Style scrollBarStyle = AppearanceStyles.ScrollBarStyle();
+            if (scrollBarStyle != null)
+            {
+                scroller.Resources[typeof(ScrollBar)] = scrollBarStyle;
+            }
             Grid.SetRow(scroller, 1);
             content.Children.Add(scroller);
             content.Children.Add(BuildFooter());
@@ -180,6 +249,85 @@ namespace EveryGo
             _card.MouseLeftButtonDown += OnCardMouseDown;
             root.Children.Add(_card);
             Content = root;
+
+            UpdateColorUi();
+            UpdateImageName();
+            UpdateAppearancePanels();
+        }
+
+        private FrameworkElement BuildColorRow()
+        {
+            Grid row = new Grid { Height = 30, Margin = new Thickness(0, 0, 0, 2) };
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+            TextBlock label = new TextBlock
+            {
+                Text = "颜色",
+                FontSize = 12,
+                Foreground = Theme.TextPrimaryBrush,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            row.Children.Add(label);
+
+            StackPanel right = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                VerticalAlignment = VerticalAlignment.Center,
+                HorizontalAlignment = HorizontalAlignment.Right
+            };
+            _colorSwatch = new Border
+            {
+                Width = 18,
+                Height = 18,
+                CornerRadius = new CornerRadius(5),
+                BorderBrush = Theme.CardBorderBrush,
+                BorderThickness = new Thickness(1),
+                Margin = new Thickness(0, 0, 6, 0)
+            };
+            _colorText = new TextBlock
+            {
+                FontSize = 11,
+                Foreground = Theme.TextSecondaryBrush,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 0, 8, 0)
+            };
+            right.Children.Add(_colorSwatch);
+            right.Children.Add(_colorText);
+            right.Children.Add(UiControls.LinkButton("更改", ChooseColor));
+            Grid.SetColumn(right, 1);
+            row.Children.Add(right);
+            return row;
+        }
+
+        private FrameworkElement BuildImageActionsRow()
+        {
+            Grid row = new Grid { Height = 30, Margin = new Thickness(0, 0, 0, 2) };
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+            TextBlock label = new TextBlock
+            {
+                Text = "背景图片",
+                FontSize = 12,
+                Foreground = Theme.TextPrimaryBrush,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            row.Children.Add(label);
+
+            StackPanel right = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                VerticalAlignment = VerticalAlignment.Center,
+                HorizontalAlignment = HorizontalAlignment.Right
+            };
+            FrameworkElement choose = UiControls.LinkButton("选择", ChooseImageAction);
+            choose.Margin = new Thickness(0, 0, 10, 0);
+            right.Children.Add(choose);
+            right.Children.Add(UiControls.LinkButton("清除", ClearImageAction));
+            Grid.SetColumn(right, 1);
+            row.Children.Add(right);
+            return row;
         }
 
         private static int ConsoleModeIndex(string mode)
@@ -205,7 +353,8 @@ namespace EveryGo
             };
             header.Children.Add(title);
 
-            ToolbarIcon close = new ToolbarIcon("关闭设置", IconKind.Close);
+            ToolbarIcon close = new ToolbarIcon("关闭", IconKind.Close);
+            close.VerticalAlignment = VerticalAlignment.Center;
             close.MouseLeftButtonUp += delegate { Close(); };
             Grid.SetColumn(close, 1);
             header.Children.Add(close);
@@ -226,11 +375,171 @@ namespace EveryGo
                 VerticalAlignment = VerticalAlignment.Center
             };
             footer.Children.Add(version);
-
-            FrameworkElement closeButton = UiControls.SmallButton("关闭设置", Close);
-            Grid.SetColumn(closeButton, 1);
-            footer.Children.Add(closeButton);
             return footer;
+        }
+
+        private void OnAppearanceTypeSelected(int index)
+        {
+            if (_suppressUi) return;
+            if (index == 0)
+            {
+                _main.UpdateAppearance(delegate(AppearanceConfig appearance)
+                {
+                    appearance.type = Config.AppearanceSolid;
+                });
+                UpdateAppearancePanels();
+                return;
+            }
+
+            bool hasImage = !string.IsNullOrEmpty(_config.appearance.imagePath)
+                && System.IO.File.Exists(System.IO.Path.Combine(
+                    _main.DataDirectory,
+                    _config.appearance.imagePath.Replace('/', '\\')));
+            if (!hasImage)
+            {
+                if (!ChooseImage())
+                {
+                    _typeSelector.SetSelected(0);
+                    UpdateAppearancePanels();
+                }
+                return;
+            }
+
+            _main.UpdateAppearance(delegate(AppearanceConfig appearance)
+            {
+                appearance.type = Config.AppearanceImage;
+            });
+            UpdateAppearancePanels();
+        }
+
+        private bool ChooseImage()
+        {
+            Microsoft.Win32.OpenFileDialog dialog = new Microsoft.Win32.OpenFileDialog
+            {
+                Title = "选择背景图片",
+                Filter = "图片 (*.png;*.jpg;*.jpeg;*.bmp)|*.png;*.jpg;*.jpeg;*.bmp",
+                FilterIndex = 1,
+                CheckFileExists = true,
+                Multiselect = false
+            };
+            bool? result = dialog.ShowDialog(this);
+            if (result != true) return false;
+
+            string error = "";
+            if (!_main.ImportBackgroundImage(dialog.FileName, out error))
+            {
+                _main.ShowNotice(error, true);
+                return false;
+            }
+            _typeSelector.SetSelected(1);
+            UpdateImageName();
+            UpdateAppearancePanels();
+            return true;
+        }
+
+        private void ChooseImageAction()
+        {
+            ChooseImage();
+        }
+
+        private void ClearImageAction()
+        {
+            _main.ClearBackgroundImage();
+            _typeSelector.SetSelected(0);
+            UpdateImageName();
+            UpdateAppearancePanels();
+        }
+
+        private void ChooseColor()
+        {
+            Color current = Theme.ParseColor(_config.appearance.color);
+            System.Windows.Forms.ColorDialog dialog = new System.Windows.Forms.ColorDialog();
+            dialog.FullOpen = true;
+            dialog.Color = System.Drawing.Color.FromArgb(current.R, current.G, current.B);
+            if (dialog.ShowDialog() == System.Windows.Forms.DialogResult.OK)
+            {
+                string hex = string.Format(
+                    "#{0:X2}{1:X2}{2:X2}",
+                    dialog.Color.R,
+                    dialog.Color.G,
+                    dialog.Color.B);
+                _main.UpdateAppearance(delegate(AppearanceConfig appearance) { appearance.color = hex; });
+                UpdateColorUi();
+            }
+        }
+
+        private void OnOpacityChanged(int value)
+        {
+            if (_suppressUi) return;
+            _main.UpdateAppearance(delegate(AppearanceConfig appearance) { appearance.opacity = value; });
+            if (value < 20 && !_lowOpacityWarned)
+            {
+                _lowOpacityWarned = true;
+                _main.ShowNotice("透明度过低（" + value + "%），可能影响可读性。", true);
+            }
+        }
+
+        private void OnImageOpacityChanged(int value)
+        {
+            if (_suppressUi) return;
+            _main.UpdateAppearance(delegate(AppearanceConfig appearance) { appearance.imageOpacity = value; });
+        }
+
+        private void OnImageBlurChanged(int value)
+        {
+            if (_suppressUi) return;
+            _main.UpdateAppearance(delegate(AppearanceConfig appearance) { appearance.imageBlur = value; });
+        }
+
+        private void OnTintOpacityChanged(int value)
+        {
+            if (_suppressUi) return;
+            _main.UpdateAppearance(delegate(AppearanceConfig appearance) { appearance.tintOpacity = value; });
+        }
+
+        private void RestoreDefaultAppearance()
+        {
+            _main.ResetAppearance();
+            _suppressUi = true;
+            _typeSelector.SetSelected(0);
+            _glassToggle.IsChecked = _config.appearance.glass;
+            _opacityRow.SetValue(_config.appearance.opacity);
+            _imageOpacityRow.SetValue(_config.appearance.imageOpacity);
+            _imageBlurRow.SetValue(_config.appearance.imageBlur);
+            _tintRow.SetValue(_config.appearance.tintOpacity);
+            _suppressUi = false;
+            UpdateColorUi();
+            UpdateImageName();
+            UpdateAppearancePanels();
+        }
+
+        private void UpdateColorUi()
+        {
+            if (_colorSwatch == null || _colorText == null) return;
+            _colorSwatch.Background = new SolidColorBrush(Theme.ParseColor(_config.appearance.color));
+            _colorText.Text = _config.appearance.color;
+        }
+
+        private void UpdateImageName()
+        {
+            if (_imageNameText == null) return;
+            string imagePath = _config.appearance.imagePath;
+            if (string.IsNullOrEmpty(imagePath))
+            {
+                _imageNameText.Text = "未选择图片";
+            }
+            else
+            {
+                _imageNameText.Text = System.IO.Path.GetFileName(imagePath);
+            }
+        }
+
+        private void UpdateAppearancePanels()
+        {
+            if (_solidPanel == null || _imagePanel == null) return;
+            bool imageMode = _config.appearance.type == Config.AppearanceImage;
+            _solidPanel.Visibility = imageMode ? Visibility.Collapsed : Visibility.Visible;
+            _imagePanel.Visibility = imageMode ? Visibility.Visible : Visibility.Collapsed;
         }
 
         private void OpenDataDirectory()

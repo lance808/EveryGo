@@ -55,6 +55,7 @@ namespace EveryGo
                 RunCase(cases, "启动参数与工作目录", TestLaunchSpec);
                 RunCase(cases, "开机自启值与路径判定", TestAutostartValue);
                 RunCase(cases, "图标提取与缓存", delegate { TestIconCache(tempRoot); });
+                RunCase(cases, "深色控件样式解析", TestControlStyles);
             }
             catch (Exception ex)
             {
@@ -479,6 +480,14 @@ namespace EveryGo
                 Path.Combine(tempRoot, "not-exist.exe"), out missingFallback);
             Expect(missing != null, "缺失文件也应返回图标");
             Expect(missingFallback, "缺失文件应使用通用图标");
+        }
+
+        private static void TestControlStyles()
+        {
+            Expect(UiControls.MenuItemStyle() != null, "右键菜单项样式应解析成功");
+            Expect(UiControls.ContextMenuStyle() != null, "右键菜单容器样式应解析成功");
+            Expect(AppearanceStyles.SliderStyle() != null, "深色滑杆样式应解析成功");
+            Expect(AppearanceStyles.ScrollBarStyle() != null, "深色滚动条样式应解析成功");
         }
 
         /// <summary>WinExe 无控制台时附着到父进程控制台输出，失败则忽略（报告文件仍有记录）。</summary>

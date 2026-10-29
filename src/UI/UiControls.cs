@@ -23,13 +23,25 @@ namespace EveryGo
             Height = 24;
             Background = Brushes.Transparent;
             CornerRadius = new CornerRadius(6);
-            Child = IconFactory.Create(kind, 16);
-            ToolTip = UiControls.MakeToolTip(tooltip);
-            Cursor = Cursors.Hand;
             Tag = "interactive";
             Opacity = IdleOpacity;
+            ToolTip = UiControls.MakeToolTip(tooltip);
+            Cursor = Cursors.Hand;
             ToolTipService.SetInitialShowDelay(this, 350);
             ToolTipService.SetShowDuration(this, 5000);
+
+            // 显式 24×24 容器 + 16×16 居中图标，保证视觉中心与点击区域中心一致。
+            Grid hitArea = new Grid
+            {
+                Width = 24,
+                Height = 24,
+                Background = Brushes.Transparent
+            };
+            FrameworkElement icon = IconFactory.Create(kind, 16);
+            icon.HorizontalAlignment = HorizontalAlignment.Center;
+            icon.VerticalAlignment = VerticalAlignment.Center;
+            hitArea.Children.Add(icon);
+            Child = hitArea;
         }
 
         public void SetActive(bool active)
@@ -41,12 +53,14 @@ namespace EveryGo
         protected override void OnMouseEnter(MouseEventArgs e)
         {
             base.OnMouseEnter(e);
+            Background = Theme.IconHoverBrush;
             AnimateTo(HoverOpacity);
         }
 
         protected override void OnMouseLeave(MouseEventArgs e)
         {
             base.OnMouseLeave(e);
+            Background = Brushes.Transparent;
             AnimateTo(_active ? HoverOpacity : IdleOpacity);
         }
 
@@ -62,6 +76,7 @@ namespace EveryGo
     internal static class UiControls
     {
         private static Style _menuItemStyle;
+        private static Style _contextMenuStyle;
         private static readonly object MenuStyleLock = new object();
 
         public static ContextMenu CreateContextMenu()
@@ -74,14 +89,54 @@ namespace EveryGo
                 Padding = new Thickness(4),
                 FontFamily = Theme.Font,
                 FontSize = 11,
-                HasDropShadow = true
+                HasDropShadow = false
             };
+            Style menuStyle = ContextMenuStyle();
+            if (menuStyle != null) menu.Style = menuStyle;
             Style style = MenuItemStyle();
             if (style != null)
             {
                 menu.Resources[typeof(MenuItem)] = style;
             }
             return menu;
+        }
+
+        public static Style ContextMenuStyle()
+        {
+            if (_contextMenuStyle != null) return _contextMenuStyle;
+            lock (MenuStyleLock)
+            {
+                if (_contextMenuStyle != null) return _contextMenuStyle;
+                try
+                {
+                    string xaml =
+                        @"<Style xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation' "
+                        + @"xmlns:x='http://schemas.microsoft.com/winfx/2006/xaml' "
+                        + @"TargetType='{x:Type ContextMenu}'>"
+                        + @"<Setter Property='OverridesDefaultStyle' Value='True'/>"
+                        + @"<Setter Property='Template'>"
+                        + @"<Setter.Value>"
+                        + @"<ControlTemplate TargetType='{x:Type ContextMenu}'>"
+                        + @"<Border Background='{TemplateBinding Background}' BorderBrush='{TemplateBinding BorderBrush}' "
+                        + @"BorderThickness='{TemplateBinding BorderThickness}' CornerRadius='10' "
+                        + @"Padding='{TemplateBinding Padding}' SnapsToDevicePixels='True'>"
+                        + @"<ScrollViewer VerticalScrollBarVisibility='Disabled' HorizontalScrollBarVisibility='Disabled' "
+                        + @"Background='Transparent' Focusable='False'>"
+                        + @"<ItemsPresenter KeyboardNavigation.DirectionalNavigation='Cycle'/>"
+                        + @"</ScrollViewer>"
+                        + @"</Border>"
+                        + @"</ControlTemplate>"
+                        + @"</Setter.Value>"
+                        + @"</Setter>"
+                        + @"</Style>";
+                    _contextMenuStyle = (Style)XamlReader.Parse(xaml);
+                }
+                catch (Exception ex)
+                {
+                    Logger.Error("创建深色右键菜单样式失败", ex);
+                }
+                return _contextMenuStyle;
+            }
         }
 
         public static MenuItem CreateMenuItem(string header)

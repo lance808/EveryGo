@@ -21,11 +21,19 @@ namespace EveryGo
         private string _startupNotice;
 
         private Border _card;
+        private Grid _cardContent;
+        private Border _baseLayer;
+        private Image _backgroundImage;
+        private Border _tintLayer;
+        private Border _bottomShade;
         private Grid _gridHost;
         private ScrollViewer _gridScroll;
         private ToolbarIcon _pinIcon;
         private SettingsWindow _settings;
         private TrayService _tray;
+        private string _loadedBackgroundPath;
+        private bool _backgroundNoticeShown;
+        private bool _glassFallbackLogged;
 
         private DispatcherTimer _saveTimer;
         private DispatcherTimer _toastTimer;
@@ -63,6 +71,7 @@ namespace EveryGo
             _iconRefreshTimer.Start();
 
             ApplyConfig();
+            ApplyAppearance();
             RebuildPanel();
             RestorePosition();
             ApplyTrayAtStartup();
@@ -109,11 +118,35 @@ namespace EveryGo
                 CornerRadius = new CornerRadius(Theme.CardRadius),
                 BorderThickness = new Thickness(LayoutMetrics.CardBorderWidth),
                 BorderBrush = Theme.CardRimBrush,
-                Background = Theme.CardBackground(_config.appearance.color, _config.appearance.opacity),
+                Background = Brushes.Transparent,
                 Effect = Theme.CardShadow()
             };
 
-            Grid cardContent = new Grid();
+            _cardContent = new Grid { Background = Brushes.Transparent };
+            _cardContent.SizeChanged += delegate { UpdateCardClip(); };
+
+            _baseLayer = new Border { IsHitTestVisible = false };
+            _cardContent.Children.Add(_baseLayer);
+
+            _backgroundImage = new Image
+            {
+                Stretch = Stretch.UniformToFill,
+                Visibility = Visibility.Collapsed,
+                IsHitTestVisible = false
+            };
+            RenderOptions.SetBitmapScalingMode(_backgroundImage, BitmapScalingMode.HighQuality);
+            _cardContent.Children.Add(_backgroundImage);
+
+            _tintLayer = new Border { Visibility = Visibility.Collapsed, IsHitTestVisible = false };
+            _cardContent.Children.Add(_tintLayer);
+
+            _bottomShade = new Border
+            {
+                Visibility = Visibility.Collapsed,
+                Background = Theme.BottomShadeBrush,
+                IsHitTestVisible = false
+            };
+            _cardContent.Children.Add(_bottomShade);
 
             Grid layout = new Grid
             {
@@ -144,11 +177,27 @@ namespace EveryGo
             Grid.SetRow(_gridScroll, 1);
             layout.Children.Add(_gridScroll);
 
-            cardContent.Children.Add(layout);
-            _card.Child = cardContent;
+            _cardContent.Children.Add(layout);
+            _card.Child = _cardContent;
             _card.MouseLeftButtonDown += OnCardMouseDown;
             _card.ContextMenu = BuildPanelMenu();
             return _card;
+        }
+
+        private void UpdateCardClip()
+        {
+            if (_cardContent == null) return;
+            double width = _cardContent.ActualWidth;
+            double height = _cardContent.ActualHeight;
+            if (width <= 0 || height <= 0)
+            {
+                _cardContent.Clip = null;
+                return;
+            }
+            _cardContent.Clip = new RectangleGeometry(
+                new Rect(0, 0, width, height),
+                Theme.CardRadius,
+                Theme.CardRadius);
         }
 
         private FrameworkElement BuildToolbar()
@@ -231,6 +280,234 @@ namespace EveryGo
         {
             Topmost = _config.window.topmost;
             if (_pinIcon != null) _pinIcon.SetActive(_config.window.topmost);
+        }
+
+        /// <summary>外观实时预览：改配置 → 立刻重绘 → 400ms 防抖保存。</summary>
+        public void UpdateAppearance(Action<AppearanceConfig> mutate)
+        {
+            if (mutate == null) return;
+            mutate(_config.appearance);
+            _config.appearance.Normalize();
+            ApplyAppearance();
+            ScheduleSave();
+        }
+
+        public void ResetAppearance()
+        {
+            _config.appearance = new AppearanceConfig();
+            _loadedBackgroundPath = null;
+            _backgroundNoticeShown = false;
+            ApplyAppearance();
+            ScheduleSave();
+            Logger.Info("外观已恢复默认");
+        }
+
+        public bool ImportBackgroundImage(string sourcePath, out string error)
+        {
+            error = "";
+            if (string.IsNullOrEmpty(sourcePath) || !System.IO.File.Exists(sourcePath))
+            {
+                error = "图片文件不存在。";
+                return false;
+            }
+            string extension = System.IO.Path.GetExtension(sourcePath);
+            if (!IsSupportedImageExtension(extension))
+            {
+                error = "不支持的图片格式，请选择 png/jpg/jpeg/bmp。";
+                return false;
+            }
+
+            string tempFile = null;
+            try
+            {
+                BitmapSource frame;
+                using (System.IO.FileStream stream = new System.IO.FileStream(
+                    sourcePath, System.IO.FileMode.Open, System.IO.FileAccess.Read, System.IO.FileShare.Read))
+                {
+                    BitmapDecoder decoder = BitmapDecoder.Create(
+                        stream,
+                        BitmapCreateOptions.PreservePixelFormat,
+                        BitmapCacheOption.OnLoad);
+                    if (decoder.Frames.Count == 0) throw new Exception("图片没有可用帧。");
+                    frame = decoder.Frames[0];
+                    if (frame.PixelWidth <= 0 || frame.PixelHeight <= 0) throw new Exception("图片尺寸无效。");
+                }
+
+                string backgroundDir = _store.Paths.BackgroundDir;
+                System.IO.Directory.CreateDirectory(backgroundDir);
+                string targetFile = System.IO.Path.Combine(backgroundDir, "bg.png");
+                tempFile = targetFile + ".tmp";
+                PngBitmapEncoder encoder = new PngBitmapEncoder();
+                encoder.Frames.Add(BitmapFrame.Create(frame));
+                using (System.IO.FileStream output = new System.IO.FileStream(
+                    tempFile, System.IO.FileMode.Create, System.IO.FileAccess.Write, System.IO.FileShare.None))
+                {
+                    encoder.Save(output);
+                }
+                if (System.IO.File.Exists(targetFile)) System.IO.File.Delete(targetFile);
+                System.IO.File.Move(tempFile, targetFile);
+
+                _config.appearance.imagePath = "background\\bg.png";
+                _config.appearance.type = Config.AppearanceImage;
+                _config.appearance.Normalize();
+                _loadedBackgroundPath = null;
+                _backgroundNoticeShown = false;
+                ApplyAppearance();
+                SaveNow();
+                Logger.Info("已导入背景图片：" + sourcePath);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                error = "图片导入失败：" + ex.Message;
+                Logger.Error("导入背景图片失败：" + sourcePath, ex);
+                if (tempFile != null && System.IO.File.Exists(tempFile))
+                {
+                    try { System.IO.File.Delete(tempFile); } catch { }
+                }
+                return false;
+            }
+        }
+
+        public void ClearBackgroundImage()
+        {
+            _config.appearance.imagePath = "";
+            _config.appearance.type = Config.AppearanceSolid;
+            _config.appearance.Normalize();
+            _loadedBackgroundPath = null;
+            _backgroundImage.Source = null;
+            _backgroundNoticeShown = false;
+            ApplyAppearance();
+            SaveNow();
+            Logger.Info("已清除背景图片");
+        }
+
+        private static bool IsSupportedImageExtension(string extension)
+        {
+            return string.Equals(extension, ".png", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(extension, ".jpg", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(extension, ".jpeg", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(extension, ".bmp", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private void ApplyAppearance()
+        {
+            if (_card == null) return;
+            AppearanceConfig appearance = _config.appearance;
+
+            _baseLayer.Background = Theme.CardBackground(appearance.color, appearance.opacity);
+
+            bool imageMode = appearance.type == Config.AppearanceImage
+                && !string.IsNullOrEmpty(appearance.imagePath);
+            if (imageMode)
+            {
+                ApplyBackgroundImage(appearance);
+                bool hasImage = _backgroundImage.Source != null;
+                _backgroundImage.Visibility = hasImage ? Visibility.Visible : Visibility.Collapsed;
+                _tintLayer.Visibility = hasImage ? Visibility.Visible : Visibility.Collapsed;
+                _bottomShade.Visibility = hasImage ? Visibility.Visible : Visibility.Collapsed;
+                _backgroundImage.Opacity = appearance.imageOpacity / 100.0;
+                if (appearance.imageBlur > 0)
+                {
+                    _backgroundImage.Effect = new BlurEffect
+                    {
+                        Radius = appearance.imageBlur,
+                        RenderingBias = RenderingBias.Performance
+                    };
+                }
+                else
+                {
+                    _backgroundImage.Effect = null;
+                }
+                _tintLayer.Background = CreateTintBrush(appearance.color, appearance.tintOpacity);
+            }
+            else
+            {
+                _backgroundImage.Visibility = Visibility.Collapsed;
+                _tintLayer.Visibility = Visibility.Collapsed;
+                _bottomShade.Visibility = Visibility.Collapsed;
+                _backgroundImage.Effect = null;
+            }
+
+            _card.BorderBrush = appearance.glass ? Theme.CardRimBrush : Theme.CardBorderBrush;
+            _card.Effect = appearance.glass ? Theme.CardShadow() : null;
+
+            if (appearance.glass && !_glassFallbackLogged)
+            {
+                _glassFallbackLogged = true;
+                Logger.Info("分层透明窗口使用内部磨砂；系统 Acrylic 与 AllowsTransparency 不兼容，按规格回退。");
+            }
+        }
+
+        private void ApplyBackgroundImage(AppearanceConfig appearance)
+        {
+            if (string.IsNullOrEmpty(appearance.imagePath))
+            {
+                _backgroundImage.Source = null;
+                _loadedBackgroundPath = null;
+                return;
+            }
+
+            string fullPath = System.IO.Path.Combine(
+                _store.Paths.DataDir,
+                appearance.imagePath.Replace('/', '\\'));
+            if (!System.IO.File.Exists(fullPath))
+            {
+                _backgroundImage.Source = null;
+                _loadedBackgroundPath = null;
+                if (!_backgroundNoticeShown)
+                {
+                    _backgroundNoticeShown = true;
+                    string message = "背景图片不存在，已使用纯色背景。";
+                    Logger.Warn(message + " " + fullPath);
+                    ShowToast(message, true);
+                }
+                return;
+            }
+
+            if (string.Equals(_loadedBackgroundPath, fullPath, StringComparison.OrdinalIgnoreCase)
+                && _backgroundImage.Source != null)
+            {
+                return;
+            }
+
+            try
+            {
+                BitmapImage image = new BitmapImage();
+                using (System.IO.FileStream stream = new System.IO.FileStream(
+                    fullPath, System.IO.FileMode.Open, System.IO.FileAccess.Read, System.IO.FileShare.Read))
+                {
+                    image.BeginInit();
+                    image.CacheOption = BitmapCacheOption.OnLoad;
+                    image.StreamSource = stream;
+                    image.EndInit();
+                }
+                image.Freeze();
+                _backgroundImage.Source = image;
+                _loadedBackgroundPath = fullPath;
+                _backgroundNoticeShown = false;
+            }
+            catch (Exception ex)
+            {
+                Logger.Error("背景图片解码失败：" + fullPath, ex);
+                _backgroundImage.Source = null;
+                _loadedBackgroundPath = null;
+                if (!_backgroundNoticeShown)
+                {
+                    _backgroundNoticeShown = true;
+                    ShowToast("背景图片解码失败，已使用纯色背景。", true);
+                }
+            }
+        }
+
+        private static Brush CreateTintBrush(string colorHex, int tintOpacity)
+        {
+            Color color = Theme.ParseColor(colorHex);
+            int opacity = Config.ClampInt(tintOpacity, 0, 100);
+            byte alpha = (byte)(opacity * 255 / 100);
+            SolidColorBrush brush = new SolidColorBrush(Color.FromArgb(alpha, color.R, color.G, color.B));
+            brush.Freeze();
+            return brush;
         }
 
         private void RebuildPanel()

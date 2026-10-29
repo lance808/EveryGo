@@ -7,8 +7,8 @@ namespace EveryGo
 {
     internal static class Program
     {
-        public const string AppVersion = "0.2.0";
-        public const string PhaseLabel = "Phase 2";
+        public const string AppVersion = "0.3.0";
+        public const string PhaseLabel = "Phase 3";
 
         private const string MutexName = "EveryGo.SingleInstance.v1";
 

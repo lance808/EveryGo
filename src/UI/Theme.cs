@@ -33,7 +33,10 @@ namespace EveryGo
         public static readonly Brush PillTrackBrush = Frozen(new SolidColorBrush(Color.FromArgb(13, 255, 255, 255)));
         public static readonly Brush PillActiveBrush = Frozen(new SolidColorBrush(Color.FromArgb(36, 255, 255, 255)));
         public static readonly Brush PillHoverBrush = Frozen(new SolidColorBrush(Color.FromArgb(20, 255, 255, 255)));
+        public static readonly Brush IconHoverBrush = Frozen(new SolidColorBrush(Color.FromArgb(18, 255, 255, 255)));
         public static readonly Brush ToastBackgroundBrush = Frozen(new SolidColorBrush(Color.FromArgb(240, 0x18, 0x1B, 0x22)));
+        /// <summary>图片模式底部渐变：透明 → 35% 黑，保证名称可读。</summary>
+        public static readonly Brush BottomShadeBrush = CreateBottomShadeBrush();
 
         public static readonly FontFamily Font =
             new FontFamily("Segoe UI Variable Text, Microsoft YaHei UI, Segoe UI");
@@ -93,6 +96,20 @@ namespace EveryGo
             brush.GradientStops.Add(new GradientStop(Color.FromArgb(48, 255, 255, 255), 0.30));
             brush.GradientStops.Add(new GradientStop(Color.FromArgb(26, 255, 255, 255), 0.62));
             brush.GradientStops.Add(new GradientStop(Color.FromArgb(22, 255, 255, 255), 1.0));
+            brush.Freeze();
+            return brush;
+        }
+
+        private static Brush CreateBottomShadeBrush()
+        {
+            LinearGradientBrush brush = new LinearGradientBrush
+            {
+                StartPoint = new Point(0, 0),
+                EndPoint = new Point(0, 1)
+            };
+            brush.GradientStops.Add(new GradientStop(Color.FromArgb(0, 0, 0, 0), 0.0));
+            brush.GradientStops.Add(new GradientStop(Color.FromArgb(0, 0, 0, 0), 0.55));
+            brush.GradientStops.Add(new GradientStop(Color.FromArgb(89, 0, 0, 0), 1.0));
             brush.Freeze();
             return brush;
         }
