@@ -18,6 +18,8 @@ namespace EveryGo
         public static readonly Brush IconBrush = Frozen(new SolidColorBrush(Colors.White));
 
         public static readonly Brush CardBorderBrush = Frozen(new SolidColorBrush(Color.FromArgb(36, 255, 255, 255)));
+        /// <summary>玻璃描边：左上亮、右下暗，模拟顶光和侧光。</summary>
+        public static readonly Brush CardRimBrush = CreateCardRimBrush();
         public static readonly Brush DividerBrush = Frozen(new SolidColorBrush(Color.FromArgb(20, 255, 255, 255)));
 
         public static readonly Brush TileBackgroundBrush = Frozen(new SolidColorBrush(Color.FromArgb(15, 255, 255, 255)));
@@ -38,13 +40,14 @@ namespace EveryGo
 
         public static DropShadowEffect CardShadow()
         {
+            // 阴影整体下移：顶部只留极窄过渡，避免白色桌面上出现宽灰边。
             return new DropShadowEffect
             {
                 Color = Colors.Black,
-                BlurRadius = 28,
-                ShadowDepth = 8,
+                BlurRadius = 18,
+                ShadowDepth = 9,
                 Direction = 90,
-                Opacity = 0.38,
+                Opacity = 0.30,
                 RenderingBias = RenderingBias.Performance
             };
         }
@@ -77,6 +80,21 @@ namespace EveryGo
                 Convert.ToByte(hexColor.Substring(1, 2), 16),
                 Convert.ToByte(hexColor.Substring(3, 2), 16),
                 Convert.ToByte(hexColor.Substring(5, 2), 16));
+        }
+
+        private static Brush CreateCardRimBrush()
+        {
+            LinearGradientBrush brush = new LinearGradientBrush
+            {
+                StartPoint = new Point(0, 0),
+                EndPoint = new Point(1, 1)
+            };
+            brush.GradientStops.Add(new GradientStop(Color.FromArgb(84, 255, 255, 255), 0.0));
+            brush.GradientStops.Add(new GradientStop(Color.FromArgb(48, 255, 255, 255), 0.30));
+            brush.GradientStops.Add(new GradientStop(Color.FromArgb(26, 255, 255, 255), 0.62));
+            brush.GradientStops.Add(new GradientStop(Color.FromArgb(22, 255, 255, 255), 1.0));
+            brush.Freeze();
+            return brush;
         }
 
         private static byte ClampByte(int value)

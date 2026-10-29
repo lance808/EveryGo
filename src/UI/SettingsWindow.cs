@@ -51,13 +51,12 @@ namespace EveryGo
                 Margin = new Thickness(18),
                 CornerRadius = new CornerRadius(Theme.CardRadius),
                 BorderThickness = new Thickness(1),
-                BorderBrush = Theme.CardBorderBrush,
+                BorderBrush = Theme.CardRimBrush,
                 Background = Theme.CardBackground(Config.DefaultColor, Config.DefaultOpacity),
                 Effect = Theme.CardShadow()
             };
 
             Grid cardContent = new Grid();
-            cardContent.Children.Add(UiControls.TopHighlight());
 
             Grid content = new Grid { Margin = new Thickness(16, 6, 16, 14) };
             content.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });

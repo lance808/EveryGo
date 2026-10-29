@@ -85,13 +85,12 @@ namespace EveryGo
                 Margin = new Thickness(LayoutMetrics.WindowShadowMargin),
                 CornerRadius = new CornerRadius(Theme.CardRadius),
                 BorderThickness = new Thickness(LayoutMetrics.CardBorderWidth),
-                BorderBrush = Theme.CardBorderBrush,
+                BorderBrush = Theme.CardRimBrush,
                 Background = Theme.CardBackground(_config.appearance.color, _config.appearance.opacity),
                 Effect = Theme.CardShadow()
             };
 
             Grid cardContent = new Grid();
-            cardContent.Children.Add(UiControls.TopHighlight());
 
             Grid layout = new Grid
             {
@@ -191,7 +190,7 @@ namespace EveryGo
             {
                 Child = canvas,
                 Background = Brushes.Transparent,
-                ToolTip = "拖动面板"
+                ToolTip = UiControls.MakeToolTip("拖动面板")
             };
             ToolTipService.SetInitialShowDelay(wrapper, 350);
             return wrapper;
@@ -260,7 +259,7 @@ namespace EveryGo
                 Background = Brushes.Transparent,
                 Cursor = Cursors.Hand,
                 Child = visual,
-                ToolTip = "添加应用",
+                ToolTip = UiControls.MakeToolTip("添加应用"),
                 Tag = "interactive"
             };
             ToolTipService.SetInitialShowDelay(hit, 350);

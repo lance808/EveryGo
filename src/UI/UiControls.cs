@@ -23,7 +23,7 @@ namespace EveryGo
             Background = Brushes.Transparent;
             CornerRadius = new CornerRadius(6);
             Child = IconFactory.Create(kind, 16);
-            ToolTip = tooltip;
+            ToolTip = UiControls.MakeToolTip(tooltip);
             Cursor = Cursors.Hand;
             Tag = "interactive";
             Opacity = IdleOpacity;
@@ -60,25 +60,24 @@ namespace EveryGo
 
     internal static class UiControls
     {
-        public static FrameworkElement TopHighlight()
+        public static ToolTip MakeToolTip(string text)
         {
-            LinearGradientBrush brush = new LinearGradientBrush
+            TextBlock content = new TextBlock
             {
-                StartPoint = new Point(0, 0.5),
-                EndPoint = new Point(1, 0.5)
+                Text = text,
+                FontSize = 11,
+                Foreground = Theme.TextPrimaryBrush,
+                TextWrapping = TextWrapping.NoWrap
             };
-            brush.GradientStops.Add(new GradientStop(Color.FromArgb(0, 255, 255, 255), 0.0));
-            brush.GradientStops.Add(new GradientStop(Color.FromArgb(26, 255, 255, 255), 0.5));
-            brush.GradientStops.Add(new GradientStop(Color.FromArgb(0, 255, 255, 255), 1.0));
-            brush.Freeze();
-
-            return new Border
+            return new ToolTip
             {
-                Height = 1,
-                Margin = new Thickness(18, 1, 18, 0),
-                VerticalAlignment = VerticalAlignment.Top,
-                Background = brush,
-                IsHitTestVisible = false
+                Content = content,
+                FontFamily = Theme.Font,
+                Background = Theme.ToastBackgroundBrush,
+                BorderBrush = Theme.CardBorderBrush,
+                BorderThickness = new Thickness(1),
+                Padding = new Thickness(8, 5, 8, 5),
+                HasDropShadow = false
             };
         }
 
