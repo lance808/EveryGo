@@ -1133,6 +1133,15 @@ namespace EveryGo
             {
                 ShowToast(_startupNotice, true);
             }
+
+            // 启动完成后再预热菜单/滑杆/滚动条样式，首次右键与设置窗口不闪白。
+            Dispatcher.BeginInvoke(new Action(delegate
+            {
+                UiControls.MenuItemStyle();
+                UiControls.ContextMenuStyle();
+                AppearanceStyles.SliderStyle();
+                AppearanceStyles.ScrollBarStyle();
+            }), DispatcherPriority.ApplicationIdle);
         }
 
         private void OnClosing(object sender, System.ComponentModel.CancelEventArgs e)

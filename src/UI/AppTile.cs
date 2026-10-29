@@ -69,8 +69,7 @@ namespace EveryGo
                 Height = iconSize,
                 Stretch = Stretch.Uniform,
                 HorizontalAlignment = HorizontalAlignment.Center,
-                VerticalAlignment = VerticalAlignment.Center,
-                Source = IconCache.GetDefaultIcon()
+                VerticalAlignment = VerticalAlignment.Center
             };
             RenderOptions.SetBitmapScalingMode(_icon, BitmapScalingMode.HighQuality);
 
@@ -180,6 +179,10 @@ namespace EveryGo
         public void SetMissing(bool missing)
         {
             IsMissing = missing;
+            if (missing && _icon.Source == null)
+            {
+                _icon.Source = IconCache.GetDefaultIcon();
+            }
             _icon.Opacity = missing ? 0.6 : 1.0;
             _warningDot.Visibility = missing ? Visibility.Visible : Visibility.Collapsed;
             ToolTip = UiControls.MakeToolTip(missing ? "文件不存在" : (Entry == null ? "" : Entry.path));

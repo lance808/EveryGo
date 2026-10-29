@@ -91,14 +91,30 @@ namespace EveryGo
                 FontSize = 11,
                 HasDropShadow = false
             };
+            // 深色模板延迟到首次打开时解析，避免拖慢启动。
+            menu.Loaded += delegate { ApplyMenuStyles(menu); };
+            menu.Opened += delegate { ApplyMenuStyles(menu); };
+            return menu;
+        }
+
+        public static void ApplyMenuStyles(ContextMenu menu)
+        {
+            if (menu == null) return;
+            if (string.Equals(menu.Tag as string, "styled", StringComparison.Ordinal)) return;
+
             Style menuStyle = ContextMenuStyle();
             if (menuStyle != null) menu.Style = menuStyle;
-            Style style = MenuItemStyle();
-            if (style != null)
+            Style itemStyle = MenuItemStyle();
+            if (itemStyle != null)
             {
-                menu.Resources[typeof(MenuItem)] = style;
+                menu.Resources[typeof(MenuItem)] = itemStyle;
+                foreach (object item in menu.Items)
+                {
+                    MenuItem menuItem = item as MenuItem;
+                    if (menuItem != null) menuItem.Style = itemStyle;
+                }
             }
-            return menu;
+            menu.Tag = "styled";
         }
 
         public static Style ContextMenuStyle()
@@ -141,9 +157,7 @@ namespace EveryGo
 
         public static MenuItem CreateMenuItem(string header)
         {
-            MenuItem item = new MenuItem { Header = header };
-            Style style = MenuItemStyle();
-            if (style != null) item.Style = style;
+            MenuItem item = new MenuItem { Header = header, Foreground = Theme.TextPrimaryBrush };
             return item;
         }
 

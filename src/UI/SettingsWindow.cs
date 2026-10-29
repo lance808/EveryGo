@@ -369,7 +369,7 @@ namespace EveryGo
 
             TextBlock version = new TextBlock
             {
-                Text = "v" + Program.AppVersion + " · " + Program.PhaseLabel,
+                Text = "EveryGo v" + Program.AppVersion,
                 FontSize = 10.5,
                 Foreground = Theme.TextMutedBrush,
                 VerticalAlignment = VerticalAlignment.Center
