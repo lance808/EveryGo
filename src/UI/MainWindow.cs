@@ -100,6 +100,39 @@ namespace EveryGo
             UseLayoutRounding = true;
             SnapsToDevicePixels = false;
             TextOptions.SetTextFormattingMode(this, TextFormattingMode.Display);
+            ApplyWindowIcon();
+        }
+
+        /// <summary>从自身 exe 提取 64px 图标，保证任务栏与 Alt+Tab 显示新图标。</summary>
+        private void ApplyWindowIcon()
+        {
+            try
+            {
+                string exePath = _store.Paths.ExePath;
+                if (string.IsNullOrEmpty(exePath) || !System.IO.File.Exists(exePath)) return;
+
+                IntPtr[] handles = new IntPtr[1];
+                uint[] ids = new uint[1];
+                uint count = NativeMethods.PrivateExtractIcons(exePath, 0, 64, 64, handles, ids, 1, 0);
+                if (count == 0 || handles[0] == IntPtr.Zero) return;
+                try
+                {
+                    BitmapSource source = Imaging.CreateBitmapSourceFromHIcon(
+                        handles[0],
+                        Int32Rect.Empty,
+                        BitmapSizeOptions.FromEmptyOptions());
+                    source.Freeze();
+                    Icon = source;
+                }
+                finally
+                {
+                    NativeMethods.DestroyIcon(handles[0]);
+                }
+            }
+            catch
+            {
+                // 图标不是功能必需项，失败时保持系统默认。
+            }
         }
 
         private void BuildUi()

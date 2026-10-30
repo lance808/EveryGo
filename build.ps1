@@ -103,6 +103,15 @@ try {
     New-Item -ItemType Directory -Path $distDir | Out-Null
     $exePath = Join-Path $distDir 'EveryGo.exe'
 
+    $manifestPath = Join-Path $root 'app.manifest'
+    if (-not (Test-Path $manifestPath)) {
+        throw "缺少清单文件：$manifestPath"
+    }
+    $iconPath = Join-Path $root 'assets\EveryGo.ico'
+    if (-not (Test-Path $iconPath)) {
+        throw "缺少图标文件：$iconPath"
+    }
+
     $arguments = @(
         '/nologo',
         '/target:winexe',
@@ -113,7 +122,8 @@ try {
         '/codepage:65001',
         '/utf8output',
         ('/out:' + $exePath),
-        ('/win32manifest:' + (Join-Path $root 'app.manifest'))
+        ('/win32manifest:' + $manifestPath),
+        ('/win32icon:' + $iconPath)
     )
     foreach ($reference in $references) {
         $arguments += ('/reference:' + $reference)

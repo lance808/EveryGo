@@ -17,6 +17,8 @@ Windows 便携式桌面启动面板：默认只有一个「＋」，添加 exe /
 
 构建脚本自动定位 Roslyn `csc.exe`（优先 VS 2022 Build Tools），找不到时回退系统 `csc.exe`；都没有则明确报错。构建会重建 `dist\EveryGo.exe`，并把已有的 `dist\EveryGo.data` 临时移出后恢复，不会清掉应用列表与设置。
 
+应用图标为 `assets\EveryGo.ico`（16/20/24/32/40/48/64/128/256 九档，32bpp BMP 帧），通过 `/win32icon:` 编入 exe；任务栏、Alt+Tab、窗口与托盘图标都取自 exe 资源，不需要额外文件。需要改图标时运行 `.\tools\make-icon.ps1`（加 `-Preview` 会把 512px 与尺寸条带导到 `%TEMP%\EveryGo-icon-preview`），再重新构建。
+
 ## 使用
 
 ```powershell

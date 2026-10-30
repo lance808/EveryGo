@@ -38,5 +38,19 @@ namespace EveryGo
             uint creationDisposition,
             uint flagsAndAttributes,
             IntPtr templateFile);
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        public static extern uint PrivateExtractIcons(
+            string fileName,
+            int iconIndex,
+            int iconWidth,
+            int iconHeight,
+            IntPtr[] iconHandles,
+            uint[] iconIds,
+            uint iconCount,
+            uint flags);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        public static extern bool DestroyIcon(IntPtr hIcon);
     }
 }
