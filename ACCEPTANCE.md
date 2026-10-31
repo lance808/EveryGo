@@ -1,11 +1,11 @@
 # EveryGo v1.0.0 验收记录
 
-- 日期：2026-10-29（主体）；2026-10-30 增补应用图标（B 方案 GO）与 AC-06 移除流程自动化验收，版本仍为 v1.0.0
+- 日期：2026-10-29（主体）；2026-10-30 增补应用图标（B 方案 GO）与 AC-06 移除流程自动化验收；2026-10-31 修复任务栏点击最小化，版本仍为 v1.0.0
 - 环境：Windows 11 专业版 10.0.26100（x64），.NET Framework 4.8.1，系统 DPI 96（100%）
 - 构建：`.\build.ps1 -SelfTest`，退出码 0
 - 编译器：`D:\Microsoft Visual Studio\18\BuildTools\MSBuild\Current\Bin\Roslyn\csc.exe`
 - 产物：`dist\EveryGo.exe`，489,472 字节（478 KB）
-- SHA256：`BA3F76C5D8CB4AF0782FB71EF0A3AFB35D8C082D9D20EB7CF7683A22523D480C`
+- SHA256：`2B6322E17532765E3FFE0852FCC97A26BDE14F369C756481585DEAA8C28865F8`
 - 自检：`--selftest` 退出码 0，**17 通过 / 0 失败**，报告：`%TEMP%\EveryGo.selftest.log`
 
 > 构建校验阶段 `dist` 内仅有 `EveryGo.exe`、无外部 DLL；运行后按设计在 exe 同目录生成便携数据 `EveryGo.data\`（config、日志、图标与背景缓存）。
@@ -23,7 +23,7 @@
 | AC-07 | 自启 | ⚠️ 待手动确认 | 自检验证带引号路径、`IsCurrent` 与非法值；本沙箱禁止写 HKCU Run，未能实际开关注册表值（当前 Run\EveryGo 为空，未留下自启项） |
 | AC-08 | 背景 | ✅ | 用户实际导入 `background\bg.png`（6.1 MB），并将透明度改为 81%、玻璃关闭、网格 5 列；配置持久化且启动无解码错误 |
 | AC-09 | 玻璃 | ✅ | 用户多轮视觉确认：圆角、阴影、受光描边、无直角溢出；真实系统 Acrylic 不可用时按规格回退内部磨砂并记录日志 |
-| AC-10 | 窗口 | ✅ | 位置持久化（最近值 x=1065, y=631，本机 1707×1067 逻辑分辨率下的落点）；置顶开关生效；越界回中与单实例逻辑已实现 |
+| AC-10 | 窗口 | ✅ | 位置持久化（最近值 x=1065, y=631，本机 1707×1067 逻辑分辨率下的落点）；置顶开关生效；越界回中与单实例逻辑已实现；`ResizeMode=CanMinimize` 使窗口带上 `WS_MINIMIZEBOX`（实测样式 `0x160A0000`，仍无 `WS_CAPTION` / `WS_THICKFRAME`，外观与不可缩放不变），任务栏点击当前窗口图标可最小化（`IsIconic=True`）并再次点击还原，系统 `Win+↓` 等最小化手势随之可用 |
 | AC-11 | 单实例 | ✅ | 托盘隐藏状态下启动第二实例：第二实例退出，原窗口恢复可见（自动化测试） |
 | AC-12 | DPI | ⚠️ 环境限制 | 当前系统仅 96 DPI；清单声明 PerMonitorV2、布局使用 DIP，未实测 125%/150% |
 | AC-13 | 环境 | ✅ | 进程为 Medium 完整性（非管理员）；运行期 TCP/UDP 连接为空；无第三方 DLL；清单 `asInvoker` |

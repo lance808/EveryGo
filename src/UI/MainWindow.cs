@@ -93,7 +93,9 @@ namespace EveryGo
             Title = "EveryGo";
             WindowStyle = WindowStyle.None;
             AllowsTransparency = true;
-            ResizeMode = ResizeMode.NoResize;
+            // CanMinimize 而非 NoResize：无标题栏外观不变，但会带上 WS_MINIMIZEBOX，
+            // 任务栏点击当前窗口图标的最小化/还原手势才会生效。
+            ResizeMode = ResizeMode.CanMinimize;
             ShowInTaskbar = true;
             Background = Brushes.Transparent;
             FontFamily = Theme.Font;
